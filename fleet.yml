@@ -7,3 +7,7 @@ exceptions:
   - rule: GOV-RS-02
     value: no develop branch
     reason: The repo is trunk-only on main until the control repo creates develop (fleet-standard#7).
+  - rule: CI-UNIT-03
+    value:
+      lines: 18
+    reason: Most Bevy systems need a running app and have no tests; measured line coverage is 20.1 %, and the floor holds 18 to stay below the measured value.
