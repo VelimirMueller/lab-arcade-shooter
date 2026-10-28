@@ -1,36 +1,120 @@
-name: CI
+# Fleet standard ci.yml (library tier, public). Stages call VelimirMueller/fleet-workflows at v0.0.2.
+name: ci
 
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
+    branches: [develop, main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      e2e:
+        description: Run the e2e stage
+        type: boolean
+        default: false
 
-env:
-  CARGO_TERM_COLOR: always
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ci-${{ github.event.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  check:
+  changes:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev pkg-config
-
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Detect code changes
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         with:
-          components: clippy, rustfmt
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '!**/*.md'
+              - '!docs/**'
+              - '!LICENSE'
+              - '!.github/ISSUE_TEMPLATE/**'
 
-      - uses: Swatinem/rust-cache@v2
+  lint:
+    needs: changes
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.code == 'true' }}
+    permissions:
+      contents: read
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-lint.yml@v0.0.2
+    with:
+      stack: rust
+      # Bevy needs the ALSA and udev headers on Linux.
+      install-command: sudo apt-get update -q && sudo apt-get install -y -q libasound2-dev libudev-dev pkg-config && cargo fetch --locked
+      # Default rust lint, but dead_code stays allowed as in the old CI (unused helpers kept for later stages).
+      command: cargo fmt --all --check && cargo clippy --all-targets --all-features --locked -- -D warnings -A dead_code
 
-      - name: Format check
-        run: cargo fmt --check
+  unit:
+    needs: [changes, lint]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.code == 'true' }}
+    permissions:
+      contents: read
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-unit.yml@v0.0.2
+    with:
+      stack: rust
+      # Bevy needs the ALSA and udev headers on Linux.
+      install-command: sudo apt-get update -q && sudo apt-get install -y -q libasound2-dev libudev-dev pkg-config && cargo fetch --locked
+      # Today 20.1 % lines (macOS run); 18 leaves room for platform cfg differences. Only goes up.
+      coverage-floor: 18
 
-      - name: Clippy
-        run: cargo clippy -- -D warnings -A dead_code
+  e2e:
+    needs: [changes, unit]
+    if: ${{ !failure() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.e2e }}
+    permissions:
+      contents: read
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-e2e.yml@v0.0.2
+    with:
+      stack: rust
+      # Bevy needs the ALSA and udev headers on Linux.
+      install-command: sudo apt-get update -q && sudo apt-get install -y -q libasound2-dev libudev-dev pkg-config && cargo fetch --locked
 
-      - name: Tests
-        run: cargo test
+  build:
+    needs: [changes, e2e]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.code == 'true' }}
+    permissions:
+      contents: read
+    uses: VelimirMueller/fleet-workflows/.github/workflows/_ci-build.yml@v0.0.2
+    with:
+      stack: rust
+      # Bevy needs the ALSA and udev headers on Linux.
+      install-command: sudo apt-get update -q && sudo apt-get install -y -q libasound2-dev libudev-dev pkg-config && cargo fetch --locked
+      pack: false
+
+  conclusion:
+    needs: [changes, lint, unit, e2e, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Fail when a job failed or a required stage was skipped
+        env:
+          CODE: ${{ needs.changes.outputs.code }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          LINT: ${{ needs.lint.result }}
+          UNIT: ${{ needs.unit.result }}
+          BUILD: ${{ needs.build.result }}
+        run: |
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) echo "::error::a job ended as $r"; exit 1 ;; esac
+          done
+          if [ "$CODE" = "true" ]; then
+            for r in "$LINT" "$UNIT" "$BUILD"; do
+              [ "$r" = "success" ] || { echo "::error::a required stage did not run"; exit 1; }
+            done
+          fi
