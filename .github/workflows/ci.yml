@@ -38,6 +38,8 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         with:
+          # every: a file counts as code only when it matches all negated globs, that is, when it
+          # is none of the docs-only paths. One such file sets code=true (CI-COST-10).
           predicate-quantifier: every
           filters: |
             code:
