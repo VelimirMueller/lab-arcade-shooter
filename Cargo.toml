@@ -8,7 +8,7 @@ default = []
 webgpu = ["bevy/webgpu"]
 
 [dependencies]
-bevy = { version = "0.16.1", default-features = false, features = [
+bevy = { version = "0.20.0", default-features = false, features = [
     "bevy_asset",
     "bevy_audio",
     "bevy_color",
@@ -28,8 +28,8 @@ bevy = { version = "0.16.1", default-features = false, features = [
     "std",
     "webgl2",
 ] }
-rand = "0.8"
-rodio = { version = "0.20", default-features = false, features = ["wav"] }
+rand = "0.10"
+rodio = { version = "0.22", default-features = false, features = ["wav"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
